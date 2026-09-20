@@ -288,11 +288,23 @@ void InitSyscalls() {
   PatchCallChecker();
 }
 
-void HandleImageMap(uint64_t Address, bool MainImage = false) {
+bool HandleImageMap(uint64_t Address, bool MainImage = false) {
+  auto* Nt = RtlImageNtHeader(reinterpret_cast<HMODULE>(Address));
+  if (!Nt || Nt->Signature != IMAGE_NT_SIGNATURE) {
+    return false;
+  }
+
   fextl::string ModulePath = FEX::Windows::GetSectionFilePath(Address);
   fextl::string ModuleName = fextl::string {FEX::Windows::BaseName(ModulePath)};
   InvalidationTracker->HandleImageMap(ModuleName, Address);
   ImageTracker->HandleImageMap(ModulePath, Address, MainImage);
+  return true;
+}
+
+// A mapped view that is not a PE image still needs its executability tracked. Sanity-check the
+// notification before trusting it.
+bool IsLikelyMapViewNotification(uint64_t Address, uint64_t Size, ULONG Prot) {
+  return Address && Size && !(Address + Size < Address) && Prot;
 }
 
 void HandleImageUnmap(uint64_t Address, uint64_t Size) {
@@ -841,7 +853,18 @@ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Si
 
   {
     std::scoped_lock Lock(ThreadCreationMutex);
-    HandleImageMap(reinterpret_cast<uint64_t>(Address));
+    // Executable views of non-image sections reach us here but have no PE header, so HandleImageMap
+    // cannot track them, and their executability comes from the view's access rights rather than a
+    // later NtProtectVirtualMemory call - so no protection notification ever fires either. Such a
+    // range ends up untracked and executing it is rejected even though the OS considers the page
+    // executable. Protectors that dodge W^X by double-mapping one section - executable at one
+    // address, writable at another - land exactly here (Blizzard's *_loader.dll among them).
+    const uint64_t GuestAddress = reinterpret_cast<uint64_t>(Address);
+    const uint64_t GuestSize = static_cast<uint64_t>(Size);
+
+    if (!HandleImageMap(GuestAddress) && IsLikelyMapViewNotification(GuestAddress, GuestSize, Prot)) {
+      InvalidationTracker->HandleMemoryProtectionNotification(GuestAddress, GuestSize, Prot);
+    }
   }
 
 
