@@ -23,6 +23,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    # Needed for the release step: a fork's default GITHUB_TOKEN is read-only,
+    # which makes softprops/action-gh-release fail with HTTP 403.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
