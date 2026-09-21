@@ -427,8 +427,17 @@ void Dispatcher::EmitDispatcher() {
       PopCalleeSavedRegisters();
       ret();
     } else {
+#ifdef _WIN32
+      // The guest-visible fault is built from SynchronousFaultData, not from the host exception, so any trap
+      // that reaches the exception handler will do. Use the same one as SIGILL: a host SIGSEGV first goes
+      // through Wine's virtual_handle_fault, and after Blizzard's D2R_loader.dll hooks ntdll and redirects
+      // execution into a PAGE_NOACCESS page of the decrypted game, that fault never reaches the emulator and
+      // the thread stalls. The SIGILL route goes straight to exception setup and does reach it.
+      hlt(0);
+#else
       LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::r1, 0);
       ldr(ARMEmitter::XReg::x1, ARMEmitter::Reg::r1);
+#endif
     }
   }
 
