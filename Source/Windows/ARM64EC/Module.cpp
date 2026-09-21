@@ -289,6 +289,17 @@ void InitSyscalls() {
 }
 
 bool HandleImageMap(uint64_t Address, bool MainImage = false) {
+  // Only a SEC_IMAGE view is an image. A pagefile-backed section can still carry a valid PE header:
+  // protectors that remap their own image copy it into such a section, unmap the original and map
+  // the copy back at the same base (Blizzard's *_loader.dll does this). Parsing that as an image
+  // walks the load config in .rdata before the protector has restored its page protections, and
+  // faults inside FEX. Decide by the view type, which a copied header cannot fake.
+  MEMORY_BASIC_INFORMATION Info;
+  if (NtQueryVirtualMemory(NtCurrentProcess(), reinterpret_cast<void*>(Address), MemoryBasicInformation, &Info, sizeof(Info), nullptr) ||
+      Info.Type != MEM_IMAGE) {
+    return false;
+  }
+
   auto* Nt = RtlImageNtHeader(reinterpret_cast<HMODULE>(Address));
   if (!Nt || Nt->Signature != IMAGE_NT_SIGNATURE) {
     return false;

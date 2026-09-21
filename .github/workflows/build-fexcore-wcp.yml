@@ -18,7 +18,7 @@ on:
 env:
   BUILD_TYPE: Release
   LLVM_MINGW: llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64
-  FEX_WCP_VERSION: 2609-d2rfix
+  FEX_WCP_VERSION: 2609-d2rfix2
 
 jobs:
   build:
