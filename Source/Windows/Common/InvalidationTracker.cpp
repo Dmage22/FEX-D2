@@ -249,18 +249,80 @@ bool InvalidationTracker::BeginUntrackedWriteLocked(uint64_t Address, uint64_t S
 }
 
 FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint64_t Address) {
-  std::shared_lock Lock(IntervalsLock);
-  const auto XResult = XIntervals.Query(Address);
-  if (!XResult.Enclosed) {
+  // Assumes IntervalsLock is held.
+  const auto BuildResult = [this](uint64_t Address) -> FEXCore::HLE::ExecutableRangeInfo {
+    const auto XResult = XIntervals.Query(Address);
+    if (!XResult.Enclosed) {
+      return {};
+    }
+    const auto RWXResult = RWXIntervals.Query(Address);
+    if (RWXResult.Enclosed) {
+      return {RWXResult.Interval.Offset, RWXResult.Interval.End - RWXResult.Interval.Offset, true};
+    } else if (RWXResult.Size && RWXResult.Size < XResult.Size) {
+      return {XResult.Interval.Offset, RWXResult.Interval.Offset - XResult.Interval.Offset, false};
+    }
+    return {XResult.Interval.Offset, XResult.Interval.End - XResult.Interval.Offset, false};
+  };
+
+  {
+    std::shared_lock Lock(IntervalsLock);
+    const auto Result = BuildResult(Address);
+    if (Result.Size) {
+      return Result;
+    }
+  }
+
+  // The interval lists are only ever populated from allocation/protection notifications and from PE image
+  // maps. An executable view of a non-image section (NtMapViewOfSection with SECTION_MAP_EXECUTE) goes
+  // through neither: it has no PE header for HandleImageMap to walk, and its executability comes from the
+  // view's access rights rather than a subsequent NtProtectVirtualMemory call. Such a region is therefore
+  // never tracked, and executing it is rejected even though the OS considers the page executable.
+  //
+  // Protectors that avoid W^X by double-mapping one section - executable at one address, writable at
+  // another - land exactly here (Blizzard's *_loader.dll among them). Rather than add a notification for
+  // every mapping path, treat a miss as "ask the OS": if it says the page is executable, trust it and
+  // start tracking the region.
+  MEMORY_BASIC_INFORMATION Info;
+  if (!VirtualQuery(reinterpret_cast<LPCVOID>(Address), &Info, sizeof(Info))) {
     return {};
   }
-  const auto RWXResult = RWXIntervals.Query(Address);
-  if (RWXResult.Enclosed) {
-    return {RWXResult.Interval.Offset, RWXResult.Interval.End - RWXResult.Interval.Offset, true};
-  } else if (RWXResult.Size && RWXResult.Size < XResult.Size) {
-    return {XResult.Interval.Offset, RWXResult.Interval.Offset - XResult.Interval.Offset, false};
+
+  if (Info.State != MEM_COMMIT) {
+    return {};
   }
-  return {XResult.Interval.Offset, XResult.Interval.End - XResult.Interval.Offset, false};
+
+  const bool HasExec = ProtHasExec(Info.Protect);
+  const bool EffectiveExec = HasExec || (DEPDisabled && ProtIsReadable(Info.Protect));
+  if (!EffectiveExec) {
+    return {};
+  }
+
+  const auto BaseAddress = reinterpret_cast<uint64_t>(Info.BaseAddress);
+  const auto AlignedBase = BaseAddress & FEXCore::Utils::FEX_PAGE_MASK;
+  const auto AlignedSize =
+    (BaseAddress - AlignedBase + Info.RegionSize + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+
+  {
+    std::unique_lock Lock(IntervalsLock);
+
+    // Insert directly instead of going through HandleMemoryProtectionNotification: that would also run
+    // InvalidateIntervalInternal, which takes the code invalidation mutex while a block is being compiled.
+    // Nothing needs invalidating anyway - a range that was never in XIntervals has no compiled code, and
+    // unmapping already invalidates through InvalidateContainingSection.
+    FEXCore::IntervalList<uint64_t>::Interval ProtInterval {AlignedBase, AlignedBase + AlignedSize};
+
+    XIntervals.Insert(ProtInterval);
+    if (ProtIsWritable(Info.Protect)) {
+      LogMan::Msg::DFmt("Add SMC interval: {:X} - {:X}", AlignedBase, AlignedBase + AlignedSize);
+      RWXIntervals.Insert(ProtInterval);
+    }
+    if (DEPDisabled && !HasExec) {
+      DEPPromotedIntervals.Insert(ProtInterval);
+    }
+  }
+
+  std::shared_lock Lock(IntervalsLock);
+  return BuildResult(Address);
 }
 
 void InvalidationTracker::DetectMonoBackpatcherBlock(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPc) {
