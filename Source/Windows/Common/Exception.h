@@ -94,6 +94,9 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
         FaultAddress = RipPage + FEXCore::Utils::FEX_PAGE_SIZE;
       }
 
+      // Set the code explicitly like every other case: the host trap that got us here is not necessarily an
+      // access violation (on Windows the SIGSEGV trampoline raises it with hlt).
+      Dst.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
       Dst.NumberParameters = 2;
       Dst.ExceptionInformation[0] = EXCEPTION_EXECUTE_FAULT;
       Dst.ExceptionInformation[1] = FaultAddress;
