@@ -145,6 +145,7 @@ fextl::unique_ptr<FEX::DummyHandlers::DummySignalDelegator> SignalDelegator;
 fextl::unique_ptr<Exception::ECSyscallHandler> SyscallHandler;
 fextl::unique_ptr<FEX::Windows::StatAlloc> StatAllocHandler;
 std::optional<FEX::Windows::InvalidationTracker> InvalidationTracker;
+bool NtDllExtendedEFlags {};
 std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
 std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
 std::optional<FEX::Windows::ImageTracker> ImageTracker;
@@ -490,8 +491,10 @@ static ARM64_NT_CONTEXT StoreStateToPackedECContext(FEXCore::Core::InternalThrea
   ECContext.X24 = 0;
   ECContext.X28 = 0;
 
-  // NZCV+SS will be converted into EFlags by ntdll, the rest are lost during exception handling.
-  // See HandleGuestException
+  // NZCV+SS will be converted into EFlags by ntdll. PF and AF have no AArch64 equivalent and ride in the RES0 cpsr
+  // bits 26/27, which a patched ntdll maps back (Dmage22/proton-wine ow/eflags-pf-af); stock ntdll ignores them.
+  // Without this, an exception or syscall round trip clears PF - Overwatch_loader.dll resumes a decrypt-on-demand
+  // fault on a jp and takes the wrong path. See HandleGuestException
   uint32_t EFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
   ECContext.Cpsr = 0;
   ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC)) ? (1U << 21) : 0;
@@ -499,6 +502,8 @@ static ARM64_NT_CONTEXT StoreStateToPackedECContext(FEXCore::Core::InternalThrea
   ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_CF_RAW_LOC)) ? (1U << 29) : 0;
   ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_ZF_RAW_LOC)) ? (1U << 30) : 0;
   ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_SF_RAW_LOC)) ? (1U << 31) : 0;
+  ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_PF_RAW_LOC)) ? (1U << 26) : 0;
+  ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_AF_RAW_LOC)) ? (1U << 27) : 0;
 
   ECContext.Fpcr = FPCR;
   ECContext.Fpsr = FPSR;
@@ -646,9 +651,13 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
   auto* Thread = GetCPUArea().ThreadState();
   // All other EFlags bits are lost when converting to/from an ARM64EC context, so merge them in from the current JIT state.
   // This is advisable over dropping their values as thread suspend/resume uses this function, and that can happen at any point in guest code.
-  static constexpr uint32_t ECValidEFlagsMask {(1U << FEXCore::X86State::RFLAG_OF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_CF_RAW_LOC) |
-                                               (1U << FEXCore::X86State::RFLAG_ZF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_SF_RAW_LOC) |
-                                               (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC)};
+  // An ntdll exporting __wine_arm64ec_extended_eflags also carries PF and AF through the conversion.
+  static constexpr uint32_t ECBaseEFlagsMask {(1U << FEXCore::X86State::RFLAG_OF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_CF_RAW_LOC) |
+                                              (1U << FEXCore::X86State::RFLAG_ZF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_SF_RAW_LOC) |
+                                              (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC)};
+  static constexpr uint32_t ECExtendedEFlagsMask {ECBaseEFlagsMask | (1U << FEXCore::X86State::RFLAG_PF_RAW_LOC) |
+                                                  (1U << FEXCore::X86State::RFLAG_AF_RAW_LOC)};
+  const uint32_t ECValidEFlagsMask = NtDllExtendedEFlags ? ECExtendedEFlagsMask : ECBaseEFlagsMask;
 
   uint32_t StateEFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
   Context->EFlags = (Context->EFlags & ECValidEFlagsMask) | (StateEFlags & ~ECValidEFlagsMask);
@@ -677,6 +686,8 @@ NTSTATUS ProcessInit() {
 
   const auto NtDll = GetModuleHandleW(L"ntdll.dll");
   const bool IsWine = !!GetProcAddress(NtDll, "wine_get_version");
+  NtDllExtendedEFlags = !!GetProcAddress(NtDll, "__wine_arm64ec_extended_eflags");
+  LogMan::Msg::EFmt("ntdll extended eflags: {}", NtDllExtendedEFlags);
   OvercommitTracker.emplace(IsWine);
 
   FEX::Windows::SetupEnvironmentVariableValues(NtDll);
