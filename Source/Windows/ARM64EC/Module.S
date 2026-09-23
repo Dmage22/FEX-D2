@@ -168,6 +168,17 @@ DIRECT_SYSCALL_WRAPPER("#NtProtectVirtualMemoryNative", WineNtProtectVirtualMemo
 end:
   ret
 
+  // Re-enters the JIT at the guest RIP held in the (already synchronized) thread state, without a context sync.
+  // Used by the synchronous fault handler after dropping stale code.
+.global "#ReenterDispatcher"
+"#ReenterDispatcher":
+  ldr x17, [x18, #0x1788] // TEB->ChpeV2CpuAreaInfo
+  ldr x16, [x17, #0x8] // ChpeV2CpuAreaInfo->EmulatorStackBase
+  mov sp, x16
+  ldr x16, [x17, #0x48] // ChpeV2CpuAreaInfo->EmulatorData[3] - DispatcherLoopTopEnterECFillSRA
+  mov x11, #0 // Zero ENTRY_FILL_SRA_SINGLE_INST_REG to avoid single step
+  br x16 // DispatcherLoopTopEnterECFillSRA(SingleInst:x11, CPUArea:x17)
+
   // Expects target address in x0, and the SP to set in x1
 .global "#JumpSetStack"
 "#JumpSetStack":

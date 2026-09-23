@@ -99,6 +99,7 @@ static fextl::string AppConfigName {};
 
 [[noreturn]]
 void JumpSetStack(uintptr_t PC, uintptr_t SP);
+[[noreturn]] void ReenterDispatcher();
 }
 
 struct ThreadCPUArea {
@@ -680,11 +681,58 @@ static void RethrowGuestException(FEXCore::Core::InternalThreadState* Thread, co
   RaiseException(Thread, Rec, GuestContext);
 }
 
+// A NoExec stub is compiled when a block entry is not executable at compile time. If another thread makes the page
+// executable while that stub is being compiled, the invalidation from the protection change can land before the stub
+// is published, leaving it cached for good: every later run raises an execute fault for a page that is executable.
+// Decrypt-on-demand protectors (Overwatch_loader.dll) then spin forever, since their handler has nothing left to
+// unlock. Real hardware would just run the code, so when the fault is stale drop the cached code and resume at RIP.
+static bool IsStaleNoExecFault(FEXCore::Core::InternalThreadState* Thread) {
+  const auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
+  if (Fault.Signal != FEXCore::Core::FAULT_SIGSEGV || Fault.TrapNo != FEXCore::X86State::X86_TRAPNO_PF || !InvalidationTracker) {
+    return false;
+  }
+
+  const uint64_t Rip = Thread->CurrentFrame->State.rip;
+
+  // Bound the retries so a disagreement between the tracker and the compiler can never become a hang.
+  static thread_local uint64_t LastRip {};
+  static thread_local uint32_t Retries {};
+  Retries = (Rip == LastRip) ? Retries + 1 : 0;
+  LastRip = Rip;
+  if (Retries >= 16) {
+    Retries = 0;
+    return false;
+  }
+
+  // Use the same query the frontend decodes against, so a retry cannot compile another NoExec stub unless the
+  // range really is non-executable again. An x86 instruction is at most 15 bytes.
+  const uint64_t End = Rip + 15;
+  uint64_t Address = Rip;
+  while (Address < End) {
+    const auto Range = InvalidationTracker->QueryExecutableRange(Address);
+    if (!Range.Size) {
+      return false;
+    }
+    Address = Range.Base + Range.Size;
+  }
+
+  const uint64_t FirstPage = Rip & FEXCore::Utils::FEX_PAGE_MASK;
+  const uint64_t LastPage = (End - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+  InvalidationTracker->InvalidateAlignedInterval(FirstPage, LastPage - FirstPage + FEXCore::Utils::FEX_PAGE_SIZE, false);
+  return true;
+}
+
 [[noreturn]]
 static void SynchronousExceptionHandler(FEXCore::Context::Context* CTX, FEXCore::Core::CpuStateFrame* Frame) {
   // Coming in to this function, the guest state is synchronized and the host thread is in a safe location.
   auto Thread = Frame->Thread;
   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
+
+  if (IsStaleNoExecFault(Thread)) {
+    // The guest state is synchronized, so re-enter the dispatcher at RIP like BeginSimulation does.
+    Fault.FaultToTopAndGeneratedException = false;
+    ReenterDispatcher();
+  }
 
   uint64_t FPCR, FPSR;
   __asm volatile("mrs %[fpcr], fpcr" : [fpcr] "=r"(FPCR));
