@@ -536,6 +536,59 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
   NtRaiseExceptionNative(&GuestRec, &GuestContext, FirstChance);
 }
 
+// A NoExec stub is compiled when a block entry is not executable at compile time. If another thread makes the page
+// executable while that stub is being compiled, the invalidation from the protection change can land before the stub
+// is published, leaving it cached for good: every later run raises an execute fault for a page that is executable.
+// Decrypt-on-demand protectors (Overwatch_loader.dll) then spin forever, since their handler has nothing left to
+// unlock. Real hardware would just run the code, so when the fault is stale drop the cached code and resume at RIP.
+static bool RetryStaleNoExecFault(const ThreadCPUArea CPUArea, ARM64_NT_CONTEXT& Context) {
+  auto* Thread = CPUArea.ThreadState();
+  auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
+  if (!Fault.FaultToTopAndGeneratedException || Fault.Signal != FEXCore::Core::FAULT_SIGSEGV ||
+      Fault.TrapNo != FEXCore::X86State::X86_TRAPNO_PF || !InvalidationTracker) {
+    return false;
+  }
+
+  if (!IsDispatcherAddress(Context.Pc)) {
+    ReconstructThreadState(Thread, Context);
+  }
+  const uint64_t Rip = Thread->CurrentFrame->State.rip;
+
+  // Bound the retries so a disagreement between the tracker and the compiler can never become a hang.
+  static thread_local uint64_t LastRip {};
+  static thread_local uint32_t Retries {};
+  Retries = (Rip == LastRip) ? Retries + 1 : 0;
+  LastRip = Rip;
+  if (Retries >= 16) {
+    Retries = 0;
+    return false;
+  }
+
+  // Use the same query the frontend decodes against, so a retry cannot compile another NoExec stub unless the
+  // range really is non-executable again. An x86 instruction is at most 15 bytes.
+  const uint64_t End = Rip + 15;
+  uint64_t Address = Rip;
+  while (Address < End) {
+    const auto Range = InvalidationTracker->QueryExecutableRange(Address);
+    if (!Range.Size) {
+      return false;
+    }
+    Address = Range.Base + Range.Size;
+  }
+
+  const uint64_t FirstPage = Rip & FEXCore::Utils::FEX_PAGE_MASK;
+  const uint64_t LastPage = (End - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+  LogMan::Msg::EFmt("pf.stale rip={:X} retry={}", Rip, Retries);
+  InvalidationTracker->InvalidateAlignedInterval(FirstPage, LastPage - FirstPage + FEXCore::Utils::FEX_PAGE_SIZE, false);
+
+  Fault.FaultToTopAndGeneratedException = false;
+  Context.Pc = CPUArea.DispatcherLoopTopEnterECFillSRA();
+  Context.Sp = CPUArea.EmulatorStackBase();
+  Context.X11 = 0;                                        // ENTRY_FILL_SRA_SINGLE_INST_REG: normal block
+  Context.X17 = reinterpret_cast<uint64_t>(CPUArea.Area); // EC_ENTRY_CPUAREA_REG
+  return true;
+}
+
 class ECSyscallHandler : public FEXCore::HLE::SyscallHandler, public FEXCore::Allocator::FEXAllocOperators {
 public:
   ECSyscallHandler() = default;
@@ -763,6 +816,10 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
     LogMan::Msg::DFmt("Suspending: RIP: {:X} SP: {:X}", NativeContext->Pc, NativeContext->Sp);
     CPUArea.Area->InSimulation = 0;
     *CPUArea.Area->SuspendDoorbell = 0;
+    return true;
+  }
+
+  if (Exception::RetryStaleNoExecFault(CPUArea, *NativeContext)) {
     return true;
   }
 
