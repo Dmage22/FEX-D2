@@ -12,13 +12,13 @@ name: Build FEXCore WCP
 
 on:
   push:
-    branches: [ d2r/blizzard-loader-fixes ]
+    branches: [ d2r/clean ]
   workflow_dispatch:
 
 env:
   BUILD_TYPE: Release
   LLVM_MINGW: llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64
-  FEX_WCP_VERSION: 2609-d2rfix3
+  FEX_WCP_VERSION: 2609-d2rfix23
 
 jobs:
   build:
