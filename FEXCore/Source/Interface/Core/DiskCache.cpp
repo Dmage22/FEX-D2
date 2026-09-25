@@ -18,6 +18,14 @@
 #include <cstring>
 #include <atomic>
 
+#include <atomic>
+
+namespace FEXCore::Context::CompileStats {
+extern std::atomic<uint64_t> UncacheableNotReading;
+extern std::atomic<uint64_t> UncacheableAnonOff;
+extern std::atomic<uint64_t> UncacheableDecode;
+} // namespace FEXCore::Context::CompileStats
+
 namespace FEXCore {
 
 namespace DiskCache {
@@ -491,6 +499,7 @@ namespace DiskCache {
   std::optional<CodeHitData> DiskCache::Lookup(Core::InternalThreadState* Thread, std::optional<ExecutableFileSectionInfo> Region,
                                                uint64_t GuestRIP, std::optional<uint64_t>& GuestCodeKey) {
     if (!IsReadingDiskCache()) {
+      FEXCore::Context::CompileStats::UncacheableNotReading.fetch_add(1, std::memory_order_relaxed);
       return std::nullopt;
     }
     if (Region && Region->FileStartVA) {
@@ -501,6 +510,7 @@ namespace DiskCache {
       GuestCodeKey = XXH3_64bits(&FileBackedKey, sizeof(FileBackedKey));
     } else {
       if (!AnonCaching) {
+        FEXCore::Context::CompileStats::UncacheableAnonOff.fetch_add(1, std::memory_order_relaxed);
         return std::nullopt;
       }
       Thread->FrontendDecoder->DecodeLoop(reinterpret_cast<const uint8_t*>(GuestRIP), AnonPrefixGuestBytes);
@@ -510,6 +520,7 @@ namespace DiskCache {
       XXH3_64bits_reset(&HashState);
       for (auto& SubBlock : BlockInfo->Blocks) {
         if (SubBlock.BlockStatus != Frontend::Decoder::DecodedBlockStatus::SUCCESS) {
+          FEXCore::Context::CompileStats::UncacheableDecode.fetch_add(1, std::memory_order_relaxed);
           return std::nullopt;
         }
         uint64_t HashStart = SubBlock.Entry;
