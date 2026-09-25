@@ -12,13 +12,13 @@ name: Build FEXCore WCP
 
 on:
   push:
-    branches: [ d2r/clean ]
+    branches: [ d2r/clean, maple ]
   workflow_dispatch:
 
 env:
   BUILD_TYPE: Release
   LLVM_MINGW: llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64
-  FEX_WCP_VERSION: 2609-d2rfix23
+  FEX_WCP_VERSION: 2609-maple1
 
 jobs:
   build:
@@ -150,6 +150,10 @@ jobs:
             - **Instruction-fetch faults report the first unfetchable byte**, not the instruction
               start. Decrypt-on-demand protectors otherwise spin forever re-faulting on a page
               they have already unlocked.
+
+            - **WOW64: WriteProcessMemory on the current process keeps its target writable.** FEX
+              re-protected a page for SMC tracking between the app unprotecting it and wineserver
+              writing it, so hooks written into ntdll (e.g. MapleLegends' ijl15.dll) failed.
 
             Ported from the analysis in FEX-Emu/FEX#5328. Bugs 2 and 4 from that report are
             already upstream.
