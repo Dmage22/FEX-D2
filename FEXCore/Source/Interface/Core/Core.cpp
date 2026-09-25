@@ -849,6 +849,25 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
   };
 }
 
+// Diagnostic compile-path counters, read and reset by the Windows frontend's [smcstat] report.
+namespace CompileStats {
+std::atomic<uint64_t> LookupHits {};
+std::atomic<uint64_t> DiskHits {};
+std::atomic<uint64_t> DiskMisses {};
+std::atomic<uint64_t> Uncacheable {};
+std::atomic<uint64_t> UncacheableNotReading {};
+std::atomic<uint64_t> UncacheableAnonOff {};
+std::atomic<uint64_t> UncacheableDecode {};
+// Host timer ticks spent in CompileCode (CNTVCT_EL0; frequency in CNTFRQ_EL0).
+std::atomic<uint64_t> CompileTicks {};
+
+static inline uint64_t ReadTicks() {
+  uint64_t Ticks;
+  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(Ticks));
+  return Ticks;
+}
+} // namespace CompileStats
+
 uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP, uint64_t MaxInst) {
   if constexpr (BLOCK_DEBUGGING) {
     // Block debugging logic is hand-written and needs to be handled with care.
@@ -873,6 +892,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
   // Is the code in the cache?
   // The backends only check L1 and L2, not L3
   if (auto HostCode = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
+    CompileStats::LookupHits.fetch_add(1, std::memory_order_relaxed);
     return HostCode;
   }
 
@@ -907,6 +927,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
         LOGMAN_THROW_A_FMT(CachedHostCode != 0, "Couldn't find GuestRIP in Disk Cache entrypoints!");
 
         FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedDiskCacheHitCount, 1);
+        CompileStats::DiskHits.fetch_add(1, std::memory_order_relaxed);
         Thread->FrontendDecoder->DelayedDisownBuffer();
 
         Thread->FrontendDecoder->ValidateDisownedOrFree();
@@ -917,10 +938,14 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
     FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedDiskCacheMissCount, 1);
   }
 
+  (DiskCacheGuestCodeKey ? CompileStats::DiskMisses : CompileStats::Uncacheable).fetch_add(1, std::memory_order_relaxed);
+
   // Accumulate a JIT count now, as even if another thread raced us, it should count as a compile.
   FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedJITCount, 1);
 
+  const uint64_t CompileStart = CompileStats::ReadTicks();
   auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges] = CompileCode(Thread, GuestRIP, MaxInst);
+  CompileStats::CompileTicks.fetch_add(CompileStats::ReadTicks() - CompileStart, std::memory_order_relaxed);
   auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
   if (CodePtr == nullptr) {
     return 0;

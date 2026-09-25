@@ -9,8 +9,101 @@
 #include "InvalidationTracker.h"
 #include <windef.h>
 #include <winternl.h>
+#include <FEXCore/fextl/fmt.h>
+#include <FEXCore/fextl/string.h>
+#include <algorithm>
+#include <atomic>
+#include <limits>
+#include <vector>
+
+namespace FEXCore::Context::CompileStats {
+extern std::atomic<uint64_t> LookupHits;
+extern std::atomic<uint64_t> DiskHits;
+extern std::atomic<uint64_t> DiskMisses;
+extern std::atomic<uint64_t> Uncacheable;
+extern std::atomic<uint64_t> UncacheableNotReading;
+extern std::atomic<uint64_t> UncacheableAnonOff;
+extern std::atomic<uint64_t> UncacheableDecode;
+extern std::atomic<uint64_t> CompileTicks;
+} // namespace FEXCore::Context::CompileStats
 
 namespace FEX::Windows {
+namespace SMCStats {
+namespace {
+  std::atomic<uint64_t> Compiles {};
+  std::atomic<uint64_t> WriteFaultInvalidates {};
+  std::atomic<uint64_t> OtherInvalidates {};
+  std::atomic<uint64_t> OtherInvalidateBytes {};
+  std::atomic<uint64_t> LastReportMs {};
+  std::mutex PagesLock;
+  std::unordered_map<uint64_t, uint32_t> PageCounts;
+
+  uint64_t NowMs() {
+    // ntdll only: the WOW64 frontend does not link kernel32.
+    LARGE_INTEGER Time;
+    NtQuerySystemTime(&Time);
+    return static_cast<uint64_t>(Time.QuadPart) / 10000;
+  }
+
+  void MaybeReport() {
+    const uint64_t Now = NowMs();
+    uint64_t Last = LastReportMs.load(std::memory_order_relaxed);
+    if (Last == 0) {
+      LastReportMs.compare_exchange_strong(Last, Now);
+      return;
+    }
+    if (Now - Last < 10000 || !LastReportMs.compare_exchange_strong(Last, Now)) {
+      return;
+    }
+
+    std::vector<std::pair<uint64_t, uint32_t>> Top;
+    size_t DistinctPages;
+    {
+      std::scoped_lock Lock(PagesLock);
+      DistinctPages = PageCounts.size();
+      Top.assign(PageCounts.begin(), PageCounts.end());
+      PageCounts.clear();
+    }
+    std::partial_sort(Top.begin(), Top.begin() + std::min<size_t>(5, Top.size()), Top.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+    Top.resize(std::min<size_t>(5, Top.size()));
+
+    fextl::string TopStr;
+    for (const auto& [Page, Count] : Top) {
+      TopStr += fextl::fmt::format(" {:#x}:{}", Page, Count);
+    }
+
+    uint64_t TickFreq;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(TickFreq));
+    const uint64_t CompileMs = TickFreq ? FEXCore::Context::CompileStats::CompileTicks.exchange(0) * 1000 / TickFreq : 0;
+
+    LogMan::Msg::IFmt("[smcstat] {}s compile_ms={} requests={} lookup_hit={} disk_hit={} compiled(disk_miss={} uncacheable={} [notreading={} anonoff={} decode={}]) wfault_inv={} (pages={}) other_inv={} ({} KiB) top:{}",
+                      (Now - Last) / 1000, CompileMs, Compiles.exchange(0), FEXCore::Context::CompileStats::LookupHits.exchange(0), FEXCore::Context::CompileStats::DiskHits.exchange(0),
+                      FEXCore::Context::CompileStats::DiskMisses.exchange(0), FEXCore::Context::CompileStats::Uncacheable.exchange(0), FEXCore::Context::CompileStats::UncacheableNotReading.exchange(0), FEXCore::Context::CompileStats::UncacheableAnonOff.exchange(0), FEXCore::Context::CompileStats::UncacheableDecode.exchange(0), WriteFaultInvalidates.exchange(0),
+                      DistinctPages, OtherInvalidates.exchange(0), OtherInvalidateBytes.exchange(0) / 1024, TopStr);
+  }
+} // namespace
+
+void NoteCompile() {
+  Compiles.fetch_add(1, std::memory_order_relaxed);
+  MaybeReport();
+}
+
+void NoteWriteFaultInvalidate(uint64_t PageAddress) {
+  WriteFaultInvalidates.fetch_add(1, std::memory_order_relaxed);
+  {
+    std::scoped_lock Lock(PagesLock);
+    ++PageCounts[PageAddress];
+  }
+  MaybeReport();
+}
+
+void NoteOtherInvalidate(uint64_t Size) {
+  OtherInvalidates.fetch_add(1, std::memory_order_relaxed);
+  OtherInvalidateBytes.fetch_add(Size == std::numeric_limits<uint64_t>::max() ? 0 : Size, std::memory_order_relaxed);
+}
+} // namespace SMCStats
+
 InvalidationTracker::InvalidationTracker(FEXCore::Context::Context& CTX, const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads)
   : CTX {CTX}
   , Threads {Threads} {
@@ -231,6 +324,7 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
       std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());
 
       InvalidateIntervalInternalLocked(FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE);
+      SMCStats::NoteWriteFaultInvalidate(FaultAddress & FEXCore::Utils::FEX_PAGE_MASK);
 
       // Invalidate, then unprotect the faulting page with the compilation lock held to ensure that any racing invalidations are not dropped.
       ULONG TmpProt;
@@ -388,6 +482,7 @@ ULONG InvalidationTracker::GetUntrapProt(uint64_t Address) const {
 }
 
 void InvalidationTracker::InvalidateIntervalInternal(uint64_t Address, uint64_t Size) {
+  SMCStats::NoteOtherInvalidate(Size);
   std::scoped_lock CodeLock(CTX.GetCodeInvalidationMutex());
   InvalidateIntervalInternalLocked(Address, Size);
 }

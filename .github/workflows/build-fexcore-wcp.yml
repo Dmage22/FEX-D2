@@ -12,13 +12,13 @@ name: Build FEXCore WCP
 
 on:
   push:
-    branches: [ d2r/clean ]
+    branches: [ d2r/debug ]
   workflow_dispatch:
 
 env:
   BUILD_TYPE: Release
   LLVM_MINGW: llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64
-  FEX_WCP_VERSION: 2609-d2rfix23
+  FEX_WCP_VERSION: 2609-d2rfix23-debug
 
 jobs:
   build:
@@ -107,7 +107,7 @@ jobs:
             "type": "FEXCore",
             "versionName": "${FEX_WCP_VERSION}",
             "versionCode": 1,
-            "description": "FEXCore ${FEX_WCP_VERSION} - upstream main plus Blizzard loader fixes: executable non-image section views are tracked, and instruction-fetch faults report the first unfetchable byte. Built from ${GITHUB_SHA}.",
+            "description": "FEXCore ${FEX_WCP_VERSION} - DEBUG build: d2rfix23 plus [smcstat] translation counters every 10 s (FEX_SILENTLOG=0). Blizzard loader fixes: executable non-image section views are tracked, and instruction-fetch faults report the first unfetchable byte. Built from ${GITHUB_SHA}.",
             "files": [
               {"source": "libarm64ecfex.dll", "target": "\${system32}/libarm64ecfex.dll"},
               {"source": "libwow64fex.dll",   "target": "\${system32}/libwow64fex.dll"}

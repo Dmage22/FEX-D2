@@ -641,6 +641,7 @@ public:
   }
 
   void PreCompile() override {
+    FEX::Windows::SMCStats::NoteCompile();
     ProcessPendingCrossProcessEmulatorWork();
   }
 };

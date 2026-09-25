@@ -17,6 +17,14 @@ class Context;
 }
 
 namespace FEX::Windows {
+// Lightweight recompile/invalidation statistics (diagnostic). Prints one
+// "[smcstat]" summary line roughly every 10 seconds via LogMan (FEX_SILENTLOG=0).
+namespace SMCStats {
+  void NoteCompile();
+  void NoteWriteFaultInvalidate(uint64_t PageAddress);
+  void NoteOtherInvalidate(uint64_t Size);
+} // namespace SMCStats
+
 /**
  * @brief Handles SMC and regular code invalidation
  */
