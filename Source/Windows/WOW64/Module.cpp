@@ -52,6 +52,7 @@ $end_info$
 #include "Windows/Common/SHMStats.h"
 
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <atomic>
 #include <mutex>
@@ -152,6 +153,37 @@ std::mutex ThreadCreationMutex;
 std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*> Threads;
 
 decltype(__wine_unix_call_dispatcher) WineUnixCall;
+
+// Syscall number of the guest's NtWriteVirtualMemory, or UINT32_MAX if it couldn't be determined.
+uint32_t NtWriteVirtualMemorySyscall = UINT32_MAX;
+
+// Reads the syscall number from the `mov eax, imm32` that starts an x86 ntdll syscall stub.
+uint32_t GetX86SyscallNumber(uint64_t NtDllX86, const char* Name) {
+  ULONG Size;
+  const auto* Exports = reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(
+    RtlImageDirectoryEntryToData(reinterpret_cast<HMODULE>(NtDllX86), true, IMAGE_DIRECTORY_ENTRY_EXPORT, &Size));
+  if (!Exports) {
+    return UINT32_MAX;
+  }
+
+  const auto* NameTable = reinterpret_cast<const uint32_t*>(NtDllX86 + Exports->AddressOfNames);
+  const auto* FunctionTable = reinterpret_cast<const uint32_t*>(NtDllX86 + Exports->AddressOfFunctions);
+  const auto* OrdinalTable = reinterpret_cast<const uint16_t*>(NtDllX86 + Exports->AddressOfNameOrdinals);
+  for (uint32_t Idx = 0; Idx < Exports->NumberOfNames; Idx++) {
+    if (strcmp(reinterpret_cast<const char*>(NtDllX86 + NameTable[Idx]), Name) != 0) {
+      continue;
+    }
+
+    const auto* Stub = reinterpret_cast<const uint8_t*>(NtDllX86 + FunctionTable[OrdinalTable[Idx]]);
+    if (Stub[0] != 0xb8) {
+      return UINT32_MAX;
+    }
+    uint32_t SyscallNumber;
+    memcpy(&SyscallNumber, Stub + 1, sizeof(SyscallNumber));
+    return SyscallNumber;
+  }
+  return UINT32_MAX;
+}
 
 std::pair<NTSTATUS, TLS> GetThreadTLS(HANDLE Thread) {
   THREAD_BASIC_INFORMATION Info;
@@ -454,7 +486,29 @@ public:
       Context::FlushThreadStateContext();
       Context::UnlockJITContext();
       Wow64ProcessPendingCrossProcessItems();
-      ReturnRAX = static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(ReturnRSP + 4)));
+
+      // WriteProcessMemory on the current process makes the target writable and then has wineserver write it with
+      // process_vm_writev, which honours page protections. If the guest executes code from the target page in between
+      // (e.g. the NtProtectVirtualMemory stub when hooking ntdll), FEX write-protects it again for SMC tracking and the
+      // write fails. Keep such pages writable, with invalidation locked out, for the duration of the write.
+      auto* Args = reinterpret_cast<UINT*>(ReturnRSP + 4);
+      bool InLockedRWXWrite = false;
+      if (EntryRAX == NtWriteVirtualMemorySyscall && Args[0] == static_cast<UINT>(-1) && Args[3]) {
+        ThreadCreationMutex.lock();
+        CTX->GetCodeInvalidationMutex().lock();
+        InLockedRWXWrite = InvalidationTracker->BeginUntrackedWriteLocked(Args[1], Args[3]);
+        if (!InLockedRWXWrite) {
+          CTX->GetCodeInvalidationMutex().unlock();
+          ThreadCreationMutex.unlock();
+        }
+      }
+
+      ReturnRAX = static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), Args));
+
+      if (InLockedRWXWrite) {
+        CTX->GetCodeInvalidationMutex().unlock();
+        ThreadCreationMutex.unlock();
+      }
       Context::LockJITContext();
       Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
     }
@@ -544,6 +598,7 @@ void BTCpuProcessInit() {
 
   auto NtDllX86 = reinterpret_cast<SYSTEM_DLL_INIT_BLOCK*>(GetProcAddress(NtDll, "LdrSystemDllInitBlock"))->ntdll_handle;
   HandleImageMap(NtDllX86);
+  NtWriteVirtualMemorySyscall = GetX86SyscallNumber(NtDllX86, "NtWriteVirtualMemory");
 
   CPUFeatures.emplace(*CTX);
 
