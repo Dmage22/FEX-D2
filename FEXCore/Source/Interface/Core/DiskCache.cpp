@@ -1216,7 +1216,15 @@ namespace DiskCache {
       }
     }
 
-    memcpy(BlobData + GuestCodeOffset, GuestCode.data(), GuestCode.size());
+    // Copy only the decoded extents. With multiblock the span between StartAddr and StartAddr + Length can
+    // cover gaps the decoder never read - possibly pages that are not accessible right now (e.g. code a
+    // protector keeps PAGE_NOACCESS until it decrypts it on demand). Touching those from inside the
+    // compiler faults with compilation locks held. Gaps are never compared (lookup and validation only
+    // look at the extents), so zero them instead.
+    memset(BlobData + GuestCodeOffset, 0, GuestCode.size());
+    for (uint32_t i = 0; i < ExactGuestCodeExtents.size(); i += 2) {
+      memcpy(BlobData + GuestCodeOffset + ExactGuestCodeExtents[i], GuestCode.data() + ExactGuestCodeExtents[i], ExactGuestCodeExtents[i + 1]);
+    }
 
     MesaFOZ::foz_payload_key Key = {};
     {
