@@ -4,7 +4,7 @@
 >
 > Small compatibility fixes so Blizzard's protected launchers run under Wine ARM64EC on Android. No anti-cheat changes. Use at your own risk.
 >
-> - **Download:** [Releases](https://github.com/Dmage22/FEX-D2/releases) → `fexcore-2609-d2rfix25.wcp` (skip `-debug` and `maple` builds). Source: branch [`d2r/clean`](https://github.com/Dmage22/FEX-D2/tree/d2r/clean).
+> - **Download:** [Releases](https://github.com/Dmage22/FEX-D2/releases) → `fexcore-2610-d2rfix26.wcp` (skip `-debug` and `maple` builds). Source: branch [`d2r/clean`](https://github.com/Dmage22/FEX-D2/tree/d2r/clean).
 > - **Also needed:** Proton with the matching Wine fixes ([proton-wine#47](https://github.com/GameNative/proton-wine/pull/47) or [`proton-11.0-2-arm64ec-6`](https://github.com/Dmage22/proton-wine/releases)).
 > - **Use ARM64EC DXVK/VKD3D builds** where you can. GameNative's default ones are x86-64 and run emulated; native builds noticeably cut CPU load and shader-compile time (Overwatch went from ~5 min to ~30 s to load). Our DXVK builds: [Dmage22/dxvk releases](https://github.com/Dmage22/dxvk/releases).
 > - Tested on a Galaxy Z Fold 8 (Snapdragon 8 Elite Gen 5), headless Steam.
