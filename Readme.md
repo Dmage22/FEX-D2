@@ -9,11 +9,28 @@
 > - **Use ARM64EC DXVK/VKD3D builds** where you can. GameNative's default ones are x86-64 and run emulated; native builds noticeably cut CPU load and shader-compile time (Overwatch went from ~5 min to ~30 s to load). Our DXVK builds: [Dmage22/dxvk releases](https://github.com/Dmage22/dxvk/releases).
 > - Tested on a Galaxy Z Fold 8 (Snapdragon 8 Elite Gen 5), headless Steam.
 >
-> **FEXCore preset (both games):** TSO on, Vector TSO on, Memcpy/Half-barrier TSO off, Multiblock on, SMC checks `mtrack`, env `FEX_DISKCACHE=1`. Keep Wine debug channels off while playing.
+> **FEXCore preset (both games)**
 >
-> **Diablo II: Resurrected:** headless Steam · DX wrapper VKD3D · Wrapper + Turnip · optional `VKD3D_CONFIG=no_upload_hvv,nodxr`, `MESA_SHADER_CACHE_MAX_SIZE=4096MB` · low textures, 30 fps cap.
+> | Setting | Value |
+> |---|---|
+> | TSO / Vector TSO | on / on |
+> | Memcpy/Set TSO, Half-barrier TSO | off |
+> | Multiblock | on |
+> | SMC checks | `mtrack` |
+> | Environment | `FEX_DISKCACHE=1` |
 >
-> **Overwatch 2:** DX wrapper DXVK (`dxvk-3.1.1-gplasync-arm64ec-dm`, async) · Wrapper + Turnip · env `DXVK_CONFIG=dxgi.maxDeviceMemory=2048;dxgi.maxSharedMemory=2048;dxvk.enableGraphicsPipelineLibrary=False` and `MESA_SHADER_CACHE_MAX_SIZE=4096MB` · low textures, 30 fps cap. Large multiplayer fights are CPU-bound and may dip.
+> Keep Wine debug channels off while playing.
+>
+> **Per game**
+>
+> | | Diablo II: Resurrected | Overwatch 2 |
+> |---|---|---|
+> | Steam mode | headless | headless |
+> | DX wrapper | VKD3D | DXVK `3.1.1-gplasync-arm64ec-dm` (async) |
+> | Graphics driver | Wrapper + Turnip | Wrapper + Turnip |
+> | Environment | optional: `VKD3D_CONFIG=no_upload_hvv,nodxr`, `MESA_SHADER_CACHE_MAX_SIZE=4096MB` | `DXVK_CONFIG=dxgi.maxDeviceMemory=2048;dxgi.maxSharedMemory=2048;dxvk.enableGraphicsPipelineLibrary=False`, `MESA_SHADER_CACHE_MAX_SIZE=4096MB` |
+> | In game | low textures, 30 fps cap | low textures, 30 fps cap |
+> | Notes | | large multiplayer fights are CPU-bound and may dip |
 
 ---
 
