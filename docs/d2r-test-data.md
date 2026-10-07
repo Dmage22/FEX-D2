@@ -32,6 +32,8 @@ Everything was read from outside the game over adb, every 10 seconds: Android's 
 | 7 Oct ~09:00 | 0 | Qualcomm driver 891.7 (Adreno 8xx, from Honor firmware) | D2R crashes at launch, with and without BCn emulation | – |
 | 7 Oct | ? | Turnip Gen8 V37 instead of T30, anon caching on (not recorded) | crash | – |
 | 7 Oct | 30 min | Turnip Gen8 V37, `FEX_DISKCACHEANONCACHING=0` (not recorded) | no crash, but only 20–25 fps instead of 30–35 | – |
+| 7 Oct | 20 min | Turnip Gen8 V37, anon caching on, **SMC checks `none`**, idle in town | no problem | 0 |
+| 7 Oct | ~60 min | Turnip Gen8 V37, anon caching on, SMC checks `none`, exploring many maps, fights | no freeze, two short dips | 0 |
 
 \* Increase of the kgsl `gpufaults` counter during the run. These are GPU hangs the driver detected; most recover (felt as a stutter), the last one before a freeze does not. The counter resets on reboot.
 
@@ -65,7 +67,15 @@ Samsung limits the clocks from the moment the game loads, not only when the phon
 - Android's casing (SKIN) thresholds on this phone: level 1 at 38 °C, 2 at 40, 3 at 42, 4 at 45, 5 at 47. The phone sits at 42–46 °C during play. Changing "throttle earlier" in Samsung's Thermal Guardian did not change these Android thresholds.
 - GameNative is registered in Android's game mode, so Samsung's game service (GOS) manages its limits.
 
-## What looked better
+## Current best result
+
+Turnip Gen8 V37 + anon caching on + SMC checks `none`: about an hour of normal play across many maps with no freeze and **no GPU hangs at all** (the kgsl counter for D2R did not move across all V37 runs). One long run so far; the counter-check (V37 with `mtrack`) is still to do.
+
+Two freeze types showed up in the data: GPU hangs ending in `DEVICE_LOST` (every T30 run), and freezes with no VKD3D error where all game threads go idle, which looks like a deadlock. SMC `none` turns off FEX's code invalidation, the path where this fork already found and fixed deadlocks.
+
+SMC `none` means FEX does not notice if code is rewritten in memory. It does not change game memory, but if the game or its protector rewrites code during play, stale translations could cause crashes.
+
+## What looked better (earlier runs)
 
 The two longest runs (18 and 30 min) came after a reboot, with background apps disabled and the newer VKD3D build:
 
