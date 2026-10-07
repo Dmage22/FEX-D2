@@ -22,7 +22,7 @@ Everything was read from outside the game over adb, every 10 seconds: Android's 
 | Run (2026) | Length | What changed | How it ended | GPU hangs* |
 |---|---|---|---|---|
 | 6 Oct 23:06 | 7 min | baseline, VKD3D 472989a, BCn auto | freeze, `VK_ERROR_DEVICE_LOST` | – |
-| 6 Oct 23:19 | 8 min | FEX anon code caching off | freeze, `DEVICE_LOST` | +28 |
+| 6 Oct 23:19 | 8 min | none (first run with the recorder on) | freeze, `DEVICE_LOST` | +28 |
 | 6 Oct 23:33 | 14 min | BCn emulation `none` | freeze, `DEVICE_LOST` | +56 |
 | 6 Oct 23:56 | short | Qualcomm system driver (842.19) instead of Turnip | flashing black boxes, stopped | – |
 | 7 Oct 00:02 | 17 min | `DXVK_CONFIG=dxgi.maxDeviceMemory=2048` | Android killed GameNative (out of memory) | +22 |
@@ -74,7 +74,6 @@ The same setup still produced an 18-minute run and a 30-minute run, so a single 
 
 ## Ruled out or no effect
 
-- FEX anon code caching (froze with it off)
 - BCn emulation setting (Turnip handles D2R's compressed textures natively; `none` works)
 - Reported video memory cap (`dxgi.maxDeviceMemory`)
 - FEX translation cost: well under 1% of one CPU thread during play
@@ -82,6 +81,7 @@ The same setup still produced an 18-minute run and a 30-minute run, so a single 
 
 ## Open questions
 
+- Whether FEX anon code caching (`FEX_DISKCACHEANONCACHING=0`, on by default) plays a role. The freezes were first noticed after it was enabled; not tested yet.
 - Why D2R needs about 4.5 GB of GPU memory at the lowest settings and 720p, and whether VKD3D or Turnip allocates more than the game uses.
 - Whether active cooling (fan or clip-on cooler) raises the clock limit enough to stop the hangs.
 - Whether a different driver changes hang count or memory. Qualcomm 842.19 (system) gives broken textures with BCn `none`; Qualcomm 891.7 does not start D2R at all. Turnip Gen8 V37 (StevenMXZ, mesa-unified gen8 branch) runs fine with no visible difference from T30; not measured yet.
