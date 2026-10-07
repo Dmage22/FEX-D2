@@ -32,8 +32,8 @@ Everything was read from outside the game over adb, every 10 seconds: Android's 
 | 7 Oct ~09:00 | 0 | Qualcomm driver 891.7 (Adreno 8xx, from Honor firmware) | D2R crashes at launch, with and without BCn emulation | – |
 | 7 Oct | ? | Turnip Gen8 V37 instead of T30, anon caching on (not recorded) | crash | – |
 | 7 Oct | 30 min | Turnip Gen8 V37, `FEX_DISKCACHEANONCACHING=0` (not recorded) | no crash, but only 20–25 fps instead of 30–35 | – |
-| 7 Oct | 20 min | Turnip Gen8 V37, anon caching on, **SMC checks `none`**, idle in town | no problem | 0 |
-| 7 Oct | ~60 min | Turnip Gen8 V37, anon caching on, SMC checks `none`, exploring many maps, fights | no freeze, two short dips | 0 |
+| 7 Oct | 20 min | Turnip Gen8 V37, anon caching on, **SMC checks `none`**, `FEX_DISKCACHEVALIDATION=1`, idle in town | no problem | 0 |
+| 7 Oct | ~60 min | Turnip Gen8 V37, anon caching on, SMC checks `none`, `FEX_DISKCACHEVALIDATION=1`, exploring many maps, fights | no freeze, two short dips, 20–50 fps | 0 |
 
 \* Increase of the kgsl `gpufaults` counter during the run. These are GPU hangs the driver detected; most recover (felt as a stutter), the last one before a freeze does not. The counter resets on reboot.
 
@@ -69,11 +69,45 @@ Samsung limits the clocks from the moment the game loads, not only when the phon
 
 ## Current best result
 
-Turnip Gen8 V37 + anon caching on + SMC checks `none`: about an hour of normal play across many maps with no freeze and **no GPU hangs at all** (the kgsl counter for D2R did not move across all V37 runs). One long run so far; the counter-check (V37 with `mtrack`) is still to do.
+Turnip Gen8 V37 + SMC checks `none` + `FEX_DISKCACHEVALIDATION=1` (anon caching on): about an hour of normal play across many maps with no freeze, 20–50 fps, and **no GPU hangs at all** (the kgsl counter for D2R did not move across all V37 runs).
 
-Two freeze types showed up in the data: GPU hangs ending in `DEVICE_LOST` (every T30 run), and freezes with no VKD3D error where all game threads go idle, which looks like a deadlock. SMC `none` turns off FEX's code invalidation, the path where this fork already found and fixed deadlocks.
+Two changes were active at once, so this run cannot say which one helped:
 
-SMC `none` means FEX does not notice if code is rewritten in memory. It does not change game memory, but if the game or its protector rewrites code during play, stale translations could cause crashes.
+- **SMC checks `none`** turns off FEX's code invalidation, the path where this fork already found and fixed deadlocks.
+- **Disk cache validation** makes FEX recompile every cache hit and compare it with the cached copy. The game always runs the fresh translation, so cached code is never executed.
+
+### Two kinds of freeze
+
+On screen both look the same: the picture stops mid-frame. (Leaving GameNative and coming back to a frozen game shows a white screen; that is a side effect, not a symptom.)
+
+| | GPU hang | Deadlock |
+|---|---|---|
+| `vkd3d.log` | full of `vr -4` (`VK_ERROR_DEVICE_LOST`) | empty |
+| GPU | busy, kgsl hang counter rises | drops to 0%, counter unchanged |
+| Game threads | busy | all go idle |
+| Seen with | Turnip T30 runs | 05:59 run (T30, `mtrack`); likely the V37 + `mtrack` crash |
+
+With V37 no GPU hangs have shown up so far, which leaves the deadlock as the remaining problem.
+
+### SMC checks: `mtrack` or `none`
+
+| | `mtrack` | `none` |
+|---|---|---|
+| Speed | slower: every write into code makes FEX drop and rebuild the translation | faster: no tracking or rebuilds |
+| Stability now | froze (probably the deadlock in that rebuild path) | about an hour without a freeze (one run, with validation on) |
+| Correctness | correct: FEX notices every code change | FEX keeps running the old translation if code changes |
+
+`none` is a workaround, not a fix. It works as long as D2R and its protector never rewrite code with different content during play; if odd behavior or crashes right after loading new areas show up, switch back to `mtrack`. FEX does not change game memory in either mode.
+
+### Note on FEX logging
+
+The Windows (ARM64EC) build of FEX ignores `FEX_OUTPUTLOG`. With `FEX_SILENTLOG=0` its messages go to Wine's output, which GameNative forwards to the Android log, so they can only be read with adb.
+
+### Next steps
+
+1. Same setup at home with adb, reading the Android log for `DiskCache: validate ... mismatch` lines. Mismatches would mean the cache hands back wrong code; none would point at the invalidation path.
+2. Separation test: SMC `none` without validation.
+3. Reproduce the freeze with V37 + `mtrack`, read every D2R thread's state at the freeze over adb, then a FEX debug build that logs who holds the code invalidation lock when a thread waits on it for several seconds. Goal: a real fix so `mtrack` works again.
 
 ## What looked better (earlier runs)
 
