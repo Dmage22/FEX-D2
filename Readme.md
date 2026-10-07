@@ -31,6 +31,8 @@
 > | Environment | optional: `VKD3D_CONFIG=no_upload_hvv,nodxr`, `MESA_SHADER_CACHE_MAX_SIZE=4096MB` | `DXVK_CONFIG=dxgi.maxDeviceMemory=2048;dxgi.maxSharedMemory=2048;dxvk.enableGraphicsPipelineLibrary=False`, `MESA_SHADER_CACHE_MAX_SIZE=4096MB` |
 > | In game | low textures, 30 fps cap | low textures, 30 fps cap |
 > | Notes | | large multiplayer fights are CPU-bound and may dip |
+>
+> **D2R test data:** memory use, clock throttling and freeze runs on the Fold 8, in [docs/d2r-test-data.md](docs/d2r-test-data.md).
 
 ---
 
