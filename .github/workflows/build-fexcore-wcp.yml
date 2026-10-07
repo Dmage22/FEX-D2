@@ -18,7 +18,7 @@ on:
 env:
   BUILD_TYPE: Release
   LLVM_MINGW: llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64
-  FEX_WCP_VERSION: 2610-d2rfix26
+  FEX_WCP_VERSION: 2610-d2rfix27
 
 jobs:
   build:
@@ -107,7 +107,7 @@ jobs:
             "type": "FEXCore",
             "versionName": "${FEX_WCP_VERSION}",
             "versionCode": 1,
-            "description": "FEXCore ${FEX_WCP_VERSION} - upstream main plus Blizzard loader fixes: executable non-image section views are tracked, and instruction-fetch faults report the first unfetchable byte. Built from ${GITHUB_SHA}.",
+            "description": "FEXCore ${FEX_WCP_VERSION} - d2rfix26 plus compiler fault recovery: guest reads inside the compiler stop at inaccessible pages and restart instead of deadlocking under mtrack. Logs [xrange]/[compilefault] with FEX_SILENTLOG=0. Built from ${GITHUB_SHA}.",
             "files": [
               {"source": "libarm64ecfex.dll", "target": "\${system32}/libarm64ecfex.dll"},
               {"source": "libwow64fex.dll",   "target": "\${system32}/libwow64fex.dll"}

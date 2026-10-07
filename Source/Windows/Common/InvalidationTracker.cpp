@@ -10,6 +10,9 @@
 #include <windef.h>
 #include <winternl.h>
 
+#include <algorithm>
+#include <atomic>
+
 namespace FEX::Windows {
 InvalidationTracker::InvalidationTracker(FEXCore::Context::Context& CTX, const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads)
   : CTX {CTX}
@@ -248,7 +251,48 @@ bool InvalidationTracker::BeginUntrackedWriteLocked(uint64_t Address, uint64_t S
   return ProtectRWXIntervalsInternal(Address, Size, true);
 }
 
+// Clamps an interval-list answer to the OS region containing Address. The interval lists describe what was
+// mapped or protected as executable at notification time, at region granularity; they say nothing about whether
+// a page can be read right now. A decrypt-on-demand protector keeps the pages it has not yet decrypted at
+// PAGE_NOACCESS inside a region the lists consider executable (D2R's whole decrypted image is one such interval),
+// and it may flip protections through paths that never notify FEX. The decoder and the disk cache lookup read
+// guest memory under the compilation lock based on this answer, so an inaccessible page must end the range:
+// the block then stops in front of it and execution reaches the page through a NoExec stub, which raises the
+// fault the protector's handler expects, outside the compiler.
+static FEXCore::HLE::ExecutableRangeInfo ClampToAccessible(FEXCore::HLE::ExecutableRangeInfo Result, uint64_t Address,
+                                                           const MEMORY_BASIC_INFORMATION& Info) {
+  if (!Result.Size) {
+    return Result;
+  }
+
+  static std::atomic<uint64_t> ClampCount {};
+
+  const bool Accessible = Info.State == MEM_COMMIT && ProtIsReadable(Info.Protect) && !(Info.Protect & PAGE_GUARD);
+  if (!Accessible) {
+    const auto Count = ClampCount.fetch_add(1);
+    if (Count < 32 || (Count & 1023) == 0) {
+      LogMan::Msg::IFmt("[xrange] {:X} is tracked executable ({:X}-{:X}) but not readable: state={:X} prot={:X} (#{})", Address,
+                        Result.Base, Result.Base + Result.Size, Info.State, Info.Protect, Count);
+    }
+    return {};
+  }
+
+  const auto RegionBase = reinterpret_cast<uint64_t>(Info.BaseAddress) & FEXCore::Utils::FEX_PAGE_MASK;
+  const auto RegionEnd = RegionBase + ((Info.RegionSize + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK);
+  const auto Base = std::max(Result.Base, RegionBase);
+  const auto End = std::min(Result.Base + Result.Size, RegionEnd);
+  if (Address < Base || Address >= End) {
+    return {};
+  }
+  return {Base, End - Base, Result.Writable};
+}
+
 FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint64_t Address) {
+  MEMORY_BASIC_INFORMATION Info;
+  if (!VirtualQuery(reinterpret_cast<LPCVOID>(Address), &Info, sizeof(Info))) {
+    return {};
+  }
+
   // Assumes IntervalsLock is held.
   const auto BuildResult = [this](uint64_t Address) -> FEXCore::HLE::ExecutableRangeInfo {
     const auto XResult = XIntervals.Query(Address);
@@ -268,7 +312,7 @@ FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint
     std::shared_lock Lock(IntervalsLock);
     const auto Result = BuildResult(Address);
     if (Result.Size) {
-      return Result;
+      return ClampToAccessible(Result, Address, Info);
     }
   }
 
@@ -282,11 +326,6 @@ FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint
   // another - land exactly here (Blizzard's *_loader.dll among them). Rather than add a notification for
   // every mapping path, treat a miss as "ask the OS": if it says the page is executable, trust it and
   // start tracking the region.
-  MEMORY_BASIC_INFORMATION Info;
-  if (!VirtualQuery(reinterpret_cast<LPCVOID>(Address), &Info, sizeof(Info))) {
-    return {};
-  }
-
   if (Info.State != MEM_COMMIT) {
     return {};
   }
@@ -322,7 +361,7 @@ FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint
   }
 
   std::shared_lock Lock(IntervalsLock);
-  return BuildResult(Address);
+  return ClampToAccessible(BuildResult(Address), Address, Info);
 }
 
 void InvalidationTracker::DetectMonoBackpatcherBlock(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPc) {

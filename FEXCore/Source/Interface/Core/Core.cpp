@@ -848,6 +848,24 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
   };
 }
 
+namespace {
+// Marks the window in which a guest read fault must restart the compiler instead of reaching the guest.
+// See InternalThreadState::CompileDepth.
+struct CompileDepthScope {
+  FEXCore::Core::InternalThreadState* Thread;
+  explicit CompileDepthScope(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP)
+    : Thread {Thread} {
+    Thread->CompileDepth++;
+    Thread->CompileEntryRIP = GuestRIP;
+    Thread->CompileFaultPage = 0;
+    Thread->CompileRestartCount = 0;
+  }
+  ~CompileDepthScope() {
+    Thread->CompileDepth--;
+  }
+};
+} // namespace
+
 uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP, uint64_t MaxInst) {
   if constexpr (BLOCK_DEBUGGING) {
     // Block debugging logic is hand-written and needs to be handled with care.
@@ -873,6 +891,16 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
   // The backends only check L1 and L2, not L3
   if (auto HostCode = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
     return HostCode;
+  }
+
+  CompileDepthScope DepthScope {Thread, GuestRIP};
+  // Restart point for guest read faults taken inside the compiler. The frontend's exception handler lands here
+  // (with a non-zero value) after recording the faulting page in Thread->CompileFaultPage; the executable range
+  // query then reports that page as non-executable, so the decoder ends the block in front of it and execution
+  // reaches the page through a NoExec stub, which raises the fault the guest's handler expects. Nothing below
+  // this point holds a lock while reading guest memory, so abandoning those frames is safe.
+  if (FEXCore::UncheckedLongJump::SetJump(Thread->CompileRestartJump)) {
+    Thread->FrontendDecoder->ResetExecutableRangeCache();
   }
 
   Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, MaxInst);
@@ -1031,6 +1059,12 @@ uintptr_t ContextImpl::CompileSingleStep(FEXCore::Core::CpuStateFrame* Frame, ui
 
   // Invalidate might take a unique lock on this, to guarantee that during invalidation no code gets compiled
   auto lk = GuardSignalDeferringSection<std::shared_lock>(CodeInvalidationMutex, Thread);
+
+  CompileDepthScope DepthScope {Thread, GuestRIP};
+  // See CompileBlock.
+  if (FEXCore::UncheckedLongJump::SetJump(Thread->CompileRestartJump)) {
+    Thread->FrontendDecoder->ResetExecutableRangeCache();
+  }
 
   Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, 1);
   auto [CompiledCode, DebugData, StartAddr, Length, _] = CompileCode(Thread, GuestRIP, 1);

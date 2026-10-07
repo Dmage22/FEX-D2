@@ -50,6 +50,7 @@ $end_info$
 #include "BTInterface.h"
 #include "Windows/Common/SHMStats.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <type_traits>
@@ -652,6 +653,42 @@ static bool RetryStaleNoExecFault(const ThreadCPUArea CPUArea, ARM64_NT_CONTEXT&
   return true;
 }
 
+// A guest memory read inside the compiler faulted: the decoder or the disk cache lookup touched a page that is
+// inaccessible right now (a decrypt-on-demand protector keeps undecrypted pages at PAGE_NOACCESS), on a thread
+// that holds CodeInvalidationMutex shared. Letting that exception reach the guest is fatal either way: the
+// protector's handler re-enters the JIT on this thread, which blocks on the non-recursive mutex as soon as any
+// other thread has a write-fault invalidation queued (every SMC trap under mtrack), and its compile would
+// trample the decoder state of the compile it interrupted. Real hardware never pre-reads code, so the right
+// outcome is for the block to end in front of that page. Record the page, which the executable range query
+// below then reports as non-executable, and resume at the compiler's restart point.
+static bool RestartCompileOnFault(FEXCore::Core::InternalThreadState* Thread, uint64_t FaultAddress, uint64_t AccessType,
+                                  ARM64_NT_CONTEXT& Context) {
+  static constexpr uint32_t MaxRestarts = 64;
+  static std::atomic<uint64_t> FaultCount {};
+
+  // The compiler only ever reads guest memory. A write or an execute fault here is something else.
+  if (AccessType != 0) {
+    return false;
+  }
+
+  const auto Count = FaultCount.fetch_add(1);
+  if (Thread->CompileRestartCount >= MaxRestarts) {
+    LogMan::Msg::EFmt("[compilefault] giving up after {} restarts: fault={:X} block={:X} pc={:X}", Thread->CompileRestartCount,
+                      FaultAddress, Thread->CompileEntryRIP, Context.Pc);
+    return false;
+  }
+
+  Thread->CompileRestartCount++;
+  Thread->CompileFaultPage = FaultAddress & FEXCore::Utils::FEX_PAGE_MASK;
+  if (Count < 32 || (Count & 255) == 0) {
+    LogMan::Msg::IFmt("[compilefault] fault={:X} block={:X} pc={:X} depth={} restart={} (#{})", FaultAddress, Thread->CompileEntryRIP,
+                      Context.Pc, Thread->CompileDepth, Thread->CompileRestartCount, Count);
+  }
+
+  FEXCore::UncheckedLongJump::ManuallyLoadJumpBuf(Thread->CompileRestartJump, 1, Context.X, reinterpret_cast<__uint128_t*>(Context.V), &Context.Pc);
+  return true;
+}
+
 class ECSyscallHandler : public FEXCore::HLE::SyscallHandler, public FEXCore::Allocator::FEXAllocOperators {
 public:
   ECSyscallHandler() = default;
@@ -695,7 +732,24 @@ public:
   }
 
   FEXCore::HLE::ExecutableRangeInfo QueryGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Address) override {
-    return InvalidationTracker->QueryExecutableRange(Address);
+    auto Range = InvalidationTracker->QueryExecutableRange(Address);
+
+    // A compile restarted by RestartCompileOnFault must not read the page that faulted again, whatever the
+    // tracker or the OS say about it now: the fault is the ground truth for this compile.
+    const auto FaultPage = Thread->CompileFaultPage;
+    if (Range.Size && FaultPage) {
+      const auto FaultPageEnd = FaultPage + FEXCore::Utils::FEX_PAGE_SIZE;
+      const auto End = Range.Base + Range.Size;
+      if (Address >= FaultPage && Address < FaultPageEnd) {
+        return {};
+      } else if (Address < FaultPage && End > FaultPage) {
+        Range.Size = FaultPage - Range.Base;
+      } else if (Address >= FaultPageEnd && Range.Base < FaultPageEnd) {
+        Range.Size = End - FaultPageEnd;
+        Range.Base = FaultPageEnd;
+      }
+    }
+    return Range;
   }
 
   void PreCompile() override {
@@ -843,6 +897,13 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
 
     if (FEX::Windows::JITGuardPage::HandleJITGuardPage(Thread, reinterpret_cast<void*>(FaultAddress), NativeContext->X,
                                                        reinterpret_cast<__uint128_t*>(NativeContext->V), &NativeContext->Pc)) {
+      return true;
+    }
+
+    // Must come before ThreadCreationMutex is taken: a thread that holds that mutex while it waits for the code
+    // invalidation lock (HandleRWXAccessViolation below) would otherwise deadlock against this compiling thread.
+    if (Thread->CompileDepth && !CTX->IsAddressInCodeBuffer(Thread, NativeContext->Pc) && !IsDispatcherAddress(NativeContext->Pc) &&
+        Exception::RestartCompileOnFault(Thread, FaultAddress, Exception->ExceptionInformation[0], *NativeContext)) {
       return true;
     }
 
