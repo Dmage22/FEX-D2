@@ -30,6 +30,8 @@ Everything was read from outside the game over adb, every 10 seconds: Android's 
 | 7 Oct 05:59 | 18 min | after reboot, ~900 MB of background apps disabled, render scale 86% | white screen freeze, no VKD3D error logged | +5 |
 | 7 Oct 06:32 | 30 min | same as previous run | `DEVICE_LOST` | +17 |
 | 7 Oct ~09:00 | 0 | Qualcomm driver 891.7 (Adreno 8xx, from Honor firmware) | D2R crashes at launch, with and without BCn emulation | – |
+| 7 Oct | ? | Turnip Gen8 V37 instead of T30, anon caching on (not recorded) | crash | – |
+| 7 Oct | 30 min | Turnip Gen8 V37, `FEX_DISKCACHEANONCACHING=0` (not recorded) | no crash, but only 20–25 fps instead of 30–35 | – |
 
 \* Increase of the kgsl `gpufaults` counter during the run. These are GPU hangs the driver detected; most recover (felt as a stutter), the last one before a freeze does not. The counter resets on reboot.
 
@@ -81,8 +83,8 @@ The same setup still produced an 18-minute run and a 30-minute run, so a single 
 
 ## Open questions
 
-- Whether FEX anon code caching (`FEX_DISKCACHEANONCACHING=0`, on by default) plays a role. The freezes were first noticed after it was enabled; not tested yet.
+- Whether FEX anon code caching (on by default) plays a role in the freezes. One 30-minute run with it off had no crash but lost about 10 fps; needs repeats before it means anything.
 - Why D2R needs about 4.5 GB of GPU memory at the lowest settings and 720p, and whether VKD3D or Turnip allocates more than the game uses.
 - Whether active cooling (fan or clip-on cooler) raises the clock limit enough to stop the hangs.
-- Whether a different driver changes hang count or memory. Qualcomm 842.19 (system) gives broken textures with BCn `none`; Qualcomm 891.7 does not start D2R at all. Turnip Gen8 V37 (StevenMXZ, mesa-unified gen8 branch) runs fine with no visible difference from T30; not measured yet.
+- Whether a different driver changes hang count or memory. Qualcomm 842.19 (system) gives broken textures with BCn `none`; Qualcomm 891.7 does not start D2R at all. Turnip Gen8 V37 (StevenMXZ, mesa-unified gen8 branch) runs with no visible difference from T30, but has crashed too.
 - The new VKD3D asks the driver for fault details on `DEVICE_LOST`; Turnip does not provide them, so we still do not know what the GPU is doing when it hangs.
