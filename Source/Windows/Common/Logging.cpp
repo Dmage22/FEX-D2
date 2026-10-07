@@ -12,8 +12,15 @@
 namespace {
 void (*WineDbgOut)(const char* Message);
 FILE* LogFile;
+bool DebugMessages;
 
 static void MsgHandler(LogMan::DebugLevels Level, const char* Message) {
+  // Debug-level messages are compiled in on every build (INFO is the most verbose level) and trace every
+  // guest exception. A protector that runs int3-obfuscated code in a loop produces hundreds of those per
+  // second, which buries the lines worth reading. Keep them opt-in: FEX_DEBUGLOG=1.
+  if (Level == LogMan::DEBUG && !DebugMessages) {
+    return;
+  }
   const auto Output = fextl::fmt::format("{} {:X} {}\n", LogMan::DebugLevelStr(Level), GetCurrentThreadId(), Message);
   if (WineDbgOut) {
     WineDbgOut(Output.c_str());
@@ -44,6 +51,9 @@ void Init() {
   if (SilentLog()) {
     return;
   }
+
+  const char* DebugLog = getenv("FEX_DEBUGLOG");
+  DebugMessages = DebugLog && DebugLog[0] && DebugLog[0] != '0';
 
   WineDbgOut = reinterpret_cast<decltype(WineDbgOut)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "__wine_dbg_output"));
   if (!WineDbgOut) {
