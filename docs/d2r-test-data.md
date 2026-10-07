@@ -27,7 +27,7 @@ Everything was read from outside the game over adb, every 10 seconds: Android's 
 | 6 Oct 23:56 | short | Qualcomm system driver (842.19) instead of Turnip | flashing black boxes, stopped | – |
 | 7 Oct 00:02 | 17 min | `DXVK_CONFIG=dxgi.maxDeviceMemory=2048` | Android killed GameNative (out of memory) | +22 |
 | 7 Oct 00:29 | 10 min | VKD3D master 2230755 (2026-10-06), phone cold at start | D2R closed, memory exhausted, no `DEVICE_LOST` | +4 |
-| 7 Oct 05:59 | 18 min | after reboot, ~900 MB of background apps disabled, render scale 86% | white screen freeze, no VKD3D error logged | +5 |
+| 7 Oct 05:59 | 18 min | after reboot, ~900 MB of background apps disabled, render scale 86% | freeze with no VKD3D error; all game threads went idle and the GPU dropped to 0% (looks like a deadlock, not a GPU hang) | +5 |
 | 7 Oct 06:32 | 30 min | same as previous run | `DEVICE_LOST` | +17 |
 | 7 Oct ~09:00 | 0 | Qualcomm driver 891.7 (Adreno 8xx, from Honor firmware) | D2R crashes at launch, with and without BCn emulation | – |
 | 7 Oct | ? | Turnip Gen8 V37 instead of T30, anon caching on (not recorded) | crash | – |
