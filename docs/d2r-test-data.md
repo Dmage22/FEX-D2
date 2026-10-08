@@ -56,6 +56,8 @@ Setting GameNative's Wrapper option **Max Device Memory to 2 GB** (the Vulkan he
 | Growth over 18 min of play | several hundred MB | about 60 MB |
 | Run | out of memory after 15 min | 34 min, closed by user |
 
+**Present mode:** with Wrapper present mode `fifo` or `relaxed` (on a 60 Hz display) the picture jitters as if frames were shown out of order, at any fps limit; 30 fps is least bad. `mailbox` does not show this. A hand-written `MESA_VK_WSI_PRESENT_MODE` in the container environment overrides the Wrapper's present mode setting, so check for it. GameNative adds `TU_DEBUG=nolrz` for every driver whose name contains "gen8" (Turnip Gen8 V37); T30, where LRZ stays on, was the driver with all the GPU hangs, so leave it off.
+
 `DXVK_CONFIG=dxgi.maxDeviceMemory` had no effect; D2R's D3D12 path reads the Vulkan heap size. One run so far; the earlier "1 GB had no effect" note predates any way to measure GPU memory.
 
 ### Earlier measurements
