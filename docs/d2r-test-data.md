@@ -34,6 +34,9 @@ Everything was read from outside the game over adb, every 10 seconds: Android's 
 | 7 Oct | 30 min | Turnip Gen8 V37, `FEX_DISKCACHEANONCACHING=0` (not recorded) | no crash, but only 20–25 fps instead of 30–35 | – |
 | 7 Oct | 20 min | Turnip Gen8 V37, anon caching on, **SMC checks `none`**, `FEX_DISKCACHEVALIDATION=1`, idle in town | no problem | 0 |
 | 7 Oct | ~60 min | Turnip Gen8 V37, anon caching on, SMC checks `none`, `FEX_DISKCACHEVALIDATION=1`, exploring many maps, fights | no freeze, two short dips, 20–50 fps | 0 |
+| 7 Oct | ~60 min | **`2610-d2rfix27`** (compiler fault fix), SMC checks back to **`mtrack`**, anon caching on, validation off, V37 | no freeze; ended by an app switch that dropped Battle.net (see below) | – |
+| 7 Oct | 15 min | same, build with quiet logging | clean exit, fps better than before | – |
+| 8 Oct | 60 min | same, suspend policy Never | clean exit, no freeze; fps started high and crept down to 25–30 by the end | – |
 
 \* Increase of the kgsl `gpufaults` counter during the run. These are GPU hangs the driver detected; most recover (felt as a stutter), the last one before a freeze does not. The counter resets on reboot.
 
@@ -69,12 +72,33 @@ Samsung limits the clocks from the moment the game loads, not only when the phon
 
 ## Current best result
 
-Turnip Gen8 V37 + SMC checks `none` + `FEX_DISKCACHEVALIDATION=1` (anon caching on): about an hour of normal play across many maps with no freeze, 20–50 fps, and **no GPU hangs at all** (the kgsl counter for D2R did not move across all V37 runs).
+`fexcore-2610-d2rfix27` + SMC checks `mtrack` + anon caching on (Turnip Gen8 V37): three runs of 15, ~60 and 60 minutes with no freeze, and no GPU hangs across all V37 runs. `none` is no longer needed.
 
-Two changes were active at once, so this run cannot say which one helped:
+### The deadlock, and what d2rfix27 changes
 
-- **SMC checks `none`** turns off FEX's code invalidation, the path where this fork already found and fixed deadlocks.
-- **Disk cache validation** makes FEX recompile every cache hit and compare it with the cached copy. The game always runs the fresh translation, so cached code is never executed.
+The "all threads idle, GPU at 0%" freeze was a deadlock on FEX's code invalidation lock, with this chain:
+
+1. While compiling a block, FEX holds that lock shared and reads the game's code through the decoder. The only check before a read is whether the address lies in a tracked executable range, and D2R's whole decrypted image is one such range. Pages the protector has not decrypted yet are `PAGE_NOACCESS` inside it, so the read faults inside FEX's own code.
+2. The exception handler passed that fault to the game. Before doing so it took a second mutex that another thread may already hold while it waits for the invalidation lock (every write trap under `mtrack`). If it got past that, the protector's handler re-entered the JIT on the same thread, and FEX's lock does not allow a second shared hold once a writer is queued. Either way nothing moved again.
+
+`none` never queues a writer, which is why it sidestepped the freeze, at the cost of FEX no longer noticing code changes.
+
+d2rfix27 does two things:
+
+- The executable range query asks the OS about the page and stops the range at anything not readable right now. The decoder ends the block in front of a locked page; execution reaches it through FEX's normal NoExec stub, which raises the fault the protector expects, outside the compiler.
+- If a read still faults inside the compiler (the page was locked between the query and the read), the exception handler records the page and restarts that compile instead of handing the fault to the game.
+
+Both log with `FEX_SILENTLOG=0`: `[xrange]` for the first, `[compilefault]` for the second. The 60-minute run logged three `[xrange]` and one `[compilefault]` restart; on the old build that restart would have been the freeze.
+
+### What the logs show about the protector
+
+- About 40,000 NoExec stubs per hour at a flat rate, 1,400 addresses hit more than ten times, the busiest page relocked 77 times. The protector re-encrypts hot functions after use; each cycle is two protection changes, an invalidation and a recompile from the disk cache. This is the cost of `mtrack` against `none`, and it does not grow over a run.
+- One thread sits in an int3-obfuscated loop for the whole session (about 320,000 breakpoints in an hour). Each one is a full guest exception round trip.
+- FEX ignores the protector's writes to the FS/GS selectors (about 700 per hour) and cannot translate four `rep movs` with an address-size prefix. The game ran an hour with both.
+
+### fps creeping down over an hour
+
+FEX's activity in the 60-minute log is flat from start to end, so the creep is not in the translation path. The recorder data from earlier runs shows two things that do ramp over an hour: the GPU clock limit falling with heat, and D2R's memory growing with up to 4.7 GB pushed to swap. A quick test to separate them: when fps has sagged, quit and relaunch immediately while the phone is still hot. High again means in-process growth; still low means thermal.
 
 ### Two kinds of freeze
 
@@ -94,20 +118,20 @@ With V37 no GPU hangs have shown up so far, which leaves the deadlock as the rem
 | | `mtrack` | `none` |
 |---|---|---|
 | Speed | slower: every write into code makes FEX drop and rebuild the translation | faster: no tracking or rebuilds |
-| Stability now | froze (probably the deadlock in that rebuild path) | about an hour without a freeze (one run, with validation on) |
+| Stability now | froze on d2rfix26 and earlier; three clean runs on d2rfix27 | about an hour without a freeze (one run, with validation on) |
 | Correctness | correct: FEX notices every code change | FEX keeps running the old translation if code changes |
 
-`none` is a workaround, not a fix. It works as long as D2R and its protector never rewrite code with different content during play; if odd behavior or crashes right after loading new areas show up, switch back to `mtrack`. FEX does not change game memory in either mode.
+Use `mtrack` with d2rfix27. `none` remains a workaround for other builds; it works as long as D2R and its protector never rewrite code with different content during play. FEX does not change game memory in either mode.
 
 ### Note on FEX logging
 
-The Windows (ARM64EC) build of FEX ignores `FEX_OUTPUTLOG`. With `FEX_SILENTLOG=0` its messages go to Wine's output, which GameNative forwards to the Android log, so they can only be read with adb.
+The Windows (ARM64EC) build of FEX ignores `FEX_OUTPUTLOG`. With `FEX_SILENTLOG=0` its messages go to Wine's debug output, which bypasses `WINEDEBUG` channel filtering. GameNative saves that stream to `wine_logs/wine_debug.log` only while its Wine debug toggle is on; with no channels selected it still sets `WINEDEBUG=-all`, so the file holds FEX lines alone. From d2rfix27 the per-exception debug lines (which made one earlier log 69 MB) need `FEX_DEBUGLOG=1`.
 
 ### Next steps
 
-1. Same setup at home with adb, reading the Android log for `DiskCache: validate ... mismatch` lines. Mismatches would mean the cache hands back wrong code; none would point at the invalidation path.
-2. Separation test: SMC `none` without validation.
-3. Reproduce the freeze with V37 + `mtrack`, read every D2R thread's state at the freeze over adb, then a FEX debug build that logs who holds the code invalidation lock when a thread waits on it for several seconds. Goal: a real fix so `mtrack` works again.
+1. More hour-long runs on d2rfix27 with `mtrack`, with the recorder on, to put numbers on the fps creep (GPU clock limit and swap over time) and run the relaunch-while-hot test.
+2. The two FEX gaps above: translate `rep movs` with an address-size prefix, and decide what to do with FS/GS selector writes in 64-bit mode.
+3. The int3 watchdog thread: measure what its 90 exceptions per second cost on one core before deciding whether it is worth a fast path.
 
 ## What looked better (earlier runs)
 
@@ -127,7 +151,7 @@ The same setup still produced an 18-minute run and a 30-minute run, so a single 
 
 ## Open questions
 
-- Whether FEX anon code caching (on by default) plays a role in the freezes. One 30-minute run with it off had no crash but lost about 10 fps; needs repeats before it means anything.
+- ~~Whether FEX anon code caching plays a role in the freezes.~~ It does not; the freeze was the deadlock described above. Anon caching stays on: it is what makes the protector's recompile cycles cheap.
 - Why D2R needs about 4.5 GB of GPU memory at the lowest settings and 720p, and whether VKD3D or Turnip allocates more than the game uses.
 - Whether active cooling (fan or clip-on cooler) raises the clock limit enough to stop the hangs.
 - Whether a different driver changes hang count or memory. Qualcomm 842.19 (system) gives broken textures with BCn `none`; Qualcomm 891.7 does not start D2R at all. Turnip Gen8 V37 (StevenMXZ, mesa-unified gen8 branch) runs with no visible difference from T30, but has crashed too.
