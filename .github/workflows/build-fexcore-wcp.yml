@@ -18,7 +18,7 @@ on:
 env:
   BUILD_TYPE: Release
   LLVM_MINGW: llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64
-  FEX_WCP_VERSION: 2610-d2rfix29
+  FEX_WCP_VERSION: 2610-d2rfix30
 
 jobs:
   build:
@@ -107,7 +107,7 @@ jobs:
             "type": "FEXCore",
             "versionName": "${FEX_WCP_VERSION}",
             "versionCode": 1,
-            "description": "FEXCore ${FEX_WCP_VERSION} - d2rfix28 plus the BTCpu64NotifyNonImageViews export, so Proton builds with GameNative proton-wine #52 keep reporting non-image section views to this FEX. d2rfix28: compiler fault recovery, mtrack deadlock fix, rep movs/stos with a 32-bit address size in 64-bit mode are translated, and FS/GS selector writes in 64-bit mode load the selector instead of raising #UD. Logs [xrange]/[compilefault] with FEX_SILENTLOG=0; per-exception debug lines only with FEX_DEBUGLOG=1. Built from ${GITHUB_SHA}.",
+            "description": "FEXCore ${FEX_WCP_VERSION} - d2rfix29 plus two upstream CheckCall fixes (32-bit NtDllRedirectionLUTSize load, no read past the end of the LUT; FEX-Emu/FEX#6021). d2rfix29: BTCpu64NotifyNonImageViews export, so GameNative Proton keeps reporting non-image section views to this FEX. d2rfix28: compiler fault recovery, mtrack deadlock fix, rep movs/stos with a 32-bit address size in 64-bit mode are translated, and FS/GS selector writes in 64-bit mode load the selector instead of raising #UD. Logs [xrange]/[compilefault] with FEX_SILENTLOG=0; per-exception debug lines only with FEX_DEBUGLOG=1. Built from ${GITHUB_SHA}.",
             "files": [
               {"source": "libarm64ecfex.dll", "target": "\${system32}/libarm64ecfex.dll"},
               {"source": "libwow64fex.dll",   "target": "\${system32}/libwow64fex.dll"}
