@@ -33,6 +33,8 @@
 > | Notes | | large multiplayer fights are CPU-bound and may dip |
 >
 > **D2R test data:** memory use, clock throttling and freeze runs on the Fold 8, in [docs/d2r-test-data.md](docs/d2r-test-data.md).
+>
+> **Gamescope display server:** D2R hangs on its first frame unless the container sets `VKD3D_DISABLE_EXTENSIONS=VK_KHR_present_wait,VK_KHR_present_wait2,VK_KHR_present_id,VK_KHR_present_id2,VK_KHR_swapchain_maintenance1,VK_EXT_swapchain_maintenance1`. This is a GameNative Vulkan-layer bug, not FEX. Cause and evidence in [docs/d2r-gamescope.md](docs/d2r-gamescope.md).
 
 ---
 
