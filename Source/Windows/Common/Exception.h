@@ -99,8 +99,10 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
       Dst.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
       Dst.NumberParameters = 2;
       Dst.ExceptionInformation[0] = EXCEPTION_EXECUTE_FAULT;
-      // Prefer the decoder's exact partial-fetch address when it has one.
-      Dst.ExceptionInformation[1] = Fault.FaultAddress ? Fault.FaultAddress : FaultAddress;
+      // A partial decode carries the exact first unfetchable byte, which is inside the instruction. A full NoExec
+      // carries the instruction start, which can sit on a page the protector has already unlocked while the bytes
+      // it is missing are on the next one; keep the page probe above for that case.
+      Dst.ExceptionInformation[1] = (Fault.FaultAddress && Fault.FaultAddress != Rip) ? Fault.FaultAddress : FaultAddress;
       return Dst;
     }
     default: LogMan::Msg::EFmt("Unknown SIGSEGV trap: {}", Fault.TrapNo); break;
