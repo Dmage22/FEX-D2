@@ -12,7 +12,11 @@ With **Display server = gamescope** (GameNative nightlies from 2026-11), Diablo 
 VKD3D_DISABLE_EXTENSIONS=VK_KHR_present_wait,VK_KHR_present_wait2,VK_KHR_present_id,VK_KHR_present_id2,VK_KHR_swapchain_maintenance1,VK_EXT_swapchain_maintenance1
 ```
 
-The cause is not FEX, Proton, the Steam overlay or D2R's protector. It is a bug in GameNative's closed-source Vulkan layer for gamescope mode. The variable only changes which Vulkan features VKD3D uses; it does not touch the game.
+Also use **GameNative's Proton 11.0-2 rebuild 9** (`11.0-2-arm64ec-9`, the app default since 2026-10-28) or newer. It is built with XFixes (proton-wine#105); older builds (`11.0-2.2`, `.82`, our `-15`) are not, and under gamescope the controller-mode cursor (the circle D2R moves with the stick via `SetCursorPos`) is invisible because Xwayland only shows such warps while Wine hides the cursor through XFixes. Mouse/keyboard mode is unaffected. Verified 2026-11-03.
+
+Newer VKD3D-Proton (3.1+, including our ARM64X builds) triggers the hang; GameNative's default VKD3D 3.0b does not, which is why it went unnoticed. GameNative (utkarsh) is fixing the layer; once that ships, retest without the variable.
+
+The hang's cause is not FEX, Proton, the Steam overlay or D2R's protector. It is a bug in GameNative's closed-source Vulkan layer for gamescope mode. The variable only changes which Vulkan features VKD3D uses; it does not touch the game.
 
 ## Cause
 
@@ -58,4 +62,4 @@ The payload is downloaded from `https://downloads.gamenative.app/gamescope-gamen
 
 ## Upstream status
 
-Not reported to GameNative yet (as of 2026-11-03). Suggested fix for them: complete present waits and signal present fences on gamescope's presentation feedback or flip event, or stop advertising present_wait(2), present_id(2) and swapchain_maintenance1 to the guest.
+Reported to GameNative on 2026-11-03; utkarsh is fixing it in the layer. Suggested fix for them: complete present waits and signal present fences on gamescope's presentation feedback or flip event, or stop advertising present_wait(2), present_id(2) and swapchain_maintenance1 to the guest.
