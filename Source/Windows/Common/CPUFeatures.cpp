@@ -91,8 +91,10 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
 
   HostFeatures.ProcessFeatures.HostType = HostType;
   HostFeatures.ProcessFeatures.Is64BitMode = HostType == FEXCore::HostFeatures::HostTypeEnum::Arm64ec;
-  // arm64ec supports synchronous faults without a double-fault dance.
-  HostFeatures.ProcessFeatures.SupportsFaultFreeSynchronousFaults = HostType == FEXCore::HostFeatures::HostTypeEnum::Arm64ec;
+  // arm64ec supports synchronous faults without a double-fault dance, but this fork keeps the host-trap path:
+  // with the fault-free path, D2R deadlocked shortly after start-up when several threads hit NoExec stubs on
+  // freshly decrypted pages at once. The host-trap path is what D2R and Overwatch have been verified on.
+  HostFeatures.ProcessFeatures.SupportsFaultFreeSynchronousFaults = false;
 
   return HostFeatures;
 }

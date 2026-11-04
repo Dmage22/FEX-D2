@@ -728,6 +728,31 @@ static bool IsStaleNoExecFault(FEXCore::Core::InternalThreadState* Thread) {
   return true;
 }
 
+// Host-trap path (SupportsFaultFreeSynchronousFaults off): the same stale-NoExec retry, resuming through the
+// host context instead of ReenterDispatcher.
+static bool RetryStaleNoExecFault(const ThreadCPUArea CPUArea, ARM64_NT_CONTEXT& Context) {
+  auto* Thread = CPUArea.ThreadState();
+  auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
+  if (!Fault.FaultToTopAndGeneratedException || Fault.Signal != FEXCore::Core::FAULT_SIGSEGV ||
+      Fault.TrapNo != FEXCore::X86State::X86_TRAPNO_PF || !InvalidationTracker) {
+    return false;
+  }
+
+  if (!IsDispatcherAddress(Context.Pc)) {
+    ReconstructThreadState(Thread, Context);
+  }
+  if (!IsStaleNoExecFault(Thread)) {
+    return false;
+  }
+
+  Fault.FaultToTopAndGeneratedException = false;
+  Context.Pc = CPUArea.DispatcherLoopTopEnterECFillSRA();
+  Context.Sp = CPUArea.EmulatorStackBase();
+  Context.X11 = 0;                                        // ENTRY_FILL_SRA_SINGLE_INST_REG: normal block
+  Context.X17 = reinterpret_cast<uint64_t>(CPUArea.Area); // EC_ENTRY_CPUAREA_REG
+  return true;
+}
+
 [[noreturn]]
 static void SynchronousExceptionHandler(FEXCore::Context::Context* CTX, FEXCore::Core::CpuStateFrame* Frame) {
   // Coming in to this function, the guest state is synchronized and the host thread is in a safe location.
@@ -1058,6 +1083,10 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
     LogMan::Msg::DFmt("Suspending: RIP: {:X} SP: {:X}", NativeContext->Pc, NativeContext->Sp);
     CPUArea.Area->InSimulation = 0;
     *CPUArea.Area->SuspendDoorbell = 0;
+    return true;
+  }
+
+  if (Exception::RetryStaleNoExecFault(CPUArea, *NativeContext)) {
     return true;
   }
 
