@@ -759,7 +759,18 @@ static void SynchronousExceptionHandler(FEXCore::Context::Context* CTX, FEXCore:
   auto Thread = Frame->Thread;
   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
 
-  if (IsStaleNoExecFault(Thread)) {
+  // Every other call from JIT code into the emulator runs with InSyscallCallback set (EmitSignalGuardedRegion in the
+  // dispatcher), and so does the host-trap path (ScopedCallbackDisable in ResetToConsistentState): ntdll then skips
+  // the BTCpu64 memory notifications for the emulator's own memory calls. This entry point is reached with a plain
+  // branch, so the flag is clear. Dropping stale code without it deadlocks the process: the invalidation decommits
+  // lookup cache pages with the code invalidation mutex held, ntdll calls NotifyMemoryFree for that, and
+  // NotifyMemoryFree takes ThreadCreationMutex and then the non-recursive code invalidation mutex a second time.
+  const auto CPUArea = GetCPUArea();
+  CPUArea.Area->InSyscallCallback = true;
+  const bool StaleNoExec = IsStaleNoExecFault(Thread);
+  CPUArea.Area->InSyscallCallback = false;
+
+  if (StaleNoExec) {
     // The guest state is synchronized, so re-enter the dispatcher at RIP like BeginSimulation does.
     Fault.FaultToTopAndGeneratedException = false;
     ReenterDispatcher();
