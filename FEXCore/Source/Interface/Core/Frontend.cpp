@@ -13,6 +13,7 @@ $end_info$
 #include "Interface/Core/LookupCache.h"
 
 #include <array>
+#include <atomic>
 #include <algorithm>
 #include <cstring>
 #include <FEXCore/Config/Config.h>
@@ -27,6 +28,16 @@ $end_info$
 #include <FEXCore/fextl/set.h>
 
 namespace FEXCore::Frontend {
+namespace {
+  // D2R's packed loader runs code from pages it has not made executable yet, so its entry blocks hit NoExec and
+  // PartialDecode thousands of times at start-up, each line going through the host's logging. Print the first few of
+  // each kind in full, then one line at every doubling of the count.
+  bool ShouldLogEntryBlockStatus(Decoder::DecodedBlockStatus Status, uint64_t& Count) {
+    static std::atomic<uint64_t> Counts[16] {};
+    Count = Counts[static_cast<size_t>(Status) & 15].fetch_add(1, std::memory_order_relaxed) + 1;
+    return Count <= 8 || (Count & (Count - 1)) == 0;
+  }
+} // namespace
 #include "Interface/Core/VSyscall/VSyscall.inc"
 
 using namespace FEXCore::X86Tables;
@@ -1674,8 +1685,8 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
             DecodedMaxAddress -= PCOffset;
           }
           EraseBlock = true;
-        } else {
-          LogMan::Msg::EFmt("{} instruction in entry block: {:X}",
+        } else if (uint64_t Count; ShouldLogEntryBlockStatus(BlockIt->BlockStatus, Count)) {
+          LogMan::Msg::EFmt("{} instruction in entry block: {:X} ({} so far)",
                             BlockIt->BlockStatus == DecodedBlockStatus::BREAKPOINT_0       ? "Breakpoint" :
                             BlockIt->BlockStatus == DecodedBlockStatus::BREAKPOINT_1       ? "Breakpoint" :
                             BlockIt->BlockStatus == DecodedBlockStatus::BREAKPOINT_2       ? "Breakpoint" :
@@ -1685,7 +1696,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
                             BlockIt->BlockStatus == DecodedBlockStatus::BAD_RELOCATION     ? "BadRelocation" :
                             BlockIt->BlockStatus == DecodedBlockStatus::UNIMPLEMENTED_INST ? "Unimplemented" :
                                                                                              "PartialDecode",
-                            OpAddress);
+                            OpAddress, Count);
         }
         break;
       }
